@@ -8,6 +8,20 @@ from sqlalchemy import Column, String, INT, BIGINT, FLOAT, DateTime, Boolean
 # SQLAlchemy init
 Base = declarative_base()
 
+class Validator(Base):
+	__tablename__ = "validators"
+	id = Column(BIGINT, primary_key=True)
+	datetime = Column(DateTime, index=True)
+	adnl_address = Column(String(64), index=True)
+	validator_pubkey = Column(String(64), index=True)
+	validator_weight = Column(BIGINT)
+	start_work_time = Column(BIGINT, index=True)
+	end_work_time = Column(BIGINT, index=True)
+	total_weight = Column(BIGINT)
+	weight = Column(FLOAT)
+	network_name = Column(String(8), index=True)
+#end class
+
 class Data(Base):
 	__tablename__ = "data"
 	id = Column(BIGINT, primary_key=True)

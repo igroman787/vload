@@ -25,7 +25,7 @@ import urllib.request
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import datetime as DateTimeLibrary
-from models import Base, Data
+from models import Base, Data, Validator
 
 sys.path.append("/usr/src/mytonctrl/")
 from mypylib.mypylib import MyPyClass, Sleep
@@ -61,23 +61,26 @@ def close_db_connect(engine, session):
 	engine.dispose()
 #end define
 
-def clear_table(engine, session, table_class, save_coun):
+def clear_table(engine, session, table_class, save_coun, save_len=100000):
 	table = table_class.__tablename__
-	query = session.query(table_class).order_by(table_class.id.desc())
+	query = session.query(table_class)
+	query_len = query.count()
+	if query_len < save_coun*save_len:
+		return
+	query = query.order_by(table_class.id.desc())
 	data = query.first()
 	if data == None:
 		return
 	start = data.id
-	saveLen = 100000
 
 	k = start
 	sql = "create table {table}_tmp like {table}".format(table=table)
 	result = engine.execute(sql)
 
 	for i in range(save_coun):
-		sql = f"INSERT INTO {table}_tmp SELECT * FROM {table} WHERE id BETWEEN {start} - {saveLen-1} AND {start}"
+		sql = f"INSERT INTO {table}_tmp SELECT * FROM {table} WHERE id BETWEEN {start} - {save_len-1} AND {start}"
 		result = engine.execute(sql)
-		start -= saveLen
+		start -= save_len
 	#end for
 
 	# скопировать хвостик
@@ -166,6 +169,7 @@ def init():
 
 	# Start threads
 	local.StartCycle(save_telemetry, sec=60)
+	local.StartCycle(save_config34, sec=60)
 	local.StartCycle(clear_tables, sec=21600)
 #end define
 
@@ -175,6 +179,7 @@ def save_telemetry():
 	nodes = get_toncenter_data()
 	mainnet_validators = local.TryFunction(mainnet_ton.GetValidatorsList)
 	testnet_validators = local.TryFunction(testnet_ton.GetValidatorsList)
+	print(f"save_telemetry testnet_validators: {len(testnet_validators)}")
 	for node in nodes:
 		adnl_address = node.get("adnl_address")
 		mainnet_validator = list2dict(mainnet_validators).get(adnl_address)
@@ -317,7 +322,7 @@ def save_node_data(node, session, mainnet_validator, testnet_validator):
 		validator = mainnet_validator
 	elif  testnet_validator != None:
 		network_name = "testnet"
-		validator = mainnet_validator
+		validator = testnet_validator
 	else:
 		network_name = find_network_name_with_keymasterchainblock(session, keymasterchainblock)
 	if validator != None:
@@ -407,6 +412,61 @@ def find_network_name_with_keymasterchainblock(session, keymasterchainblock):
 	return data.network_name
 #end define
 
+def save_config34():
+	local.AddLog("start save_config34 function", "debug")
+	engine, session = create_db_connect()
+	mainnet_config34 = local.TryFunction(mainnet_ton.GetConfig34)
+	testnet_config34 = local.TryFunction(testnet_ton.GetConfig34)
+	mainnet_validators = mainnet_config34.get("validators")
+	testnet_validators = testnet_config34.get("validators")
+	print(f"save_config34 testnet_validators: {len(testnet_validators)}")
+	for validator in mainnet_validators:
+		adnl_address = validator.get("adnlAddr")
+		if adnl_address == "null":
+			continue
+		save_validator_data(validator, session, config34=mainnet_config34, network_name="mainnet")
+	for validator in testnet_validators:
+		adnl_address = validator.get("adnlAddr")
+		if adnl_address == "null":
+			continue
+		save_validator_data(validator, session, config34=testnet_config34, network_name="testnet")
+	close_db_connect(engine, session)
+#end define
+
+def save_validator_data(validator, session, config34, network_name):
+	start_work_time = config34.get("startWorkTime")
+	end_work_time = config34.get("endWorkTime")
+	total_weight = config34.get("totalWeight")
+	
+	datetime = DateTimeLibrary.datetime.now()
+	adnl_address = validator.get("adnlAddr")
+	validator_pubkey = validator.get("pubkey")
+	validator_weight = validator.get("weight")
+	weight = round(validator_weight / total_weight * 100, 2)
+	
+	query = session.query(Validator)
+	query = query.order_by(Validator.id.desc())
+	query = query.filter_by(start_work_time=start_work_time, validator_pubkey=validator_pubkey)
+	data = query.first()
+	if data != None:
+		return
+	#end if
+	
+	# Create DB object
+	data = Validator(
+		datetime = datetime,
+		adnl_address = adnl_address,
+		validator_pubkey = validator_pubkey,
+		validator_weight = validator_weight,
+		start_work_time = start_work_time,
+		end_work_time = end_work_time,
+		total_weight = total_weight,
+		weight = weight,
+		network_name = network_name
+	)
+	session.add(data)
+#end define
+
 def get_first(item, index=0):
 	result = None
 	try:
@@ -433,6 +493,7 @@ def clear_tables():
 	local.AddLog("start clear_tables function", "debug")
 	engine, session = create_db_connect()
 	clear_table(engine, session, Data, save_coun=50)
+	clear_table(engine, session, Validator, save_coun=50)
 	close_db_connect(engine, session)
 #end define
 
